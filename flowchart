@@ -1,0 +1,14 @@
+code-reel-generator/
+├── package.json
+├── index.html
+├── src/
+│   ├── types.ts                     # Shared interfaces & data structures
+│   ├── engine/
+│   │   ├── tracer.ts                # AST instrumentation & sandbox runner
+│   │   └── recorder.ts              # MediaRecorder canvas export pipeline
+│   ├── components/
+│   │   ├── CodeEditor.tsx           # Code input panel
+│   │   ├── ReelCanvas.tsx           # 9:16 Canvas rendering engine
+│   │   └── Controls.tsx             # Play, Seek, Record & Download controls
+│   ├── App.tsx                      # Main layout and orchestrator
+│   └── index.tsx                    # React mounting point
