@@ -1,392 +1,582 @@
-import React, { useEffect } from "react";
-import { UniversalStep, LinkedListNode, SearchCell } from "../types";
+import React, { useRef, useState, useEffect } from 'react';
+import { UniversalStep } from '../types';
 
 interface ReelCanvasProps {
-  currentStep: UniversalStep | null;
-  code: string;
-  language: string;
-  canvasRef: React.RefObject<HTMLCanvasElement>;
+  steps: UniversalStep[];
+  rawCode?: string;
+  isMobile?: boolean;
 }
 
-export const ReelCanvas: React.FC<ReelCanvasProps> = ({
-  currentStep,
-  code,
-  language,
-  canvasRef
-}) => {
-  const codeLines = code.split("\n");
+export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: ReelCanvasProps) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [currentStepIdx, setCurrentStepIdx] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
+    setCurrentStepIdx(0);
+    setIsPlaying(false);
+  }, [steps]);
+
+  const drawFrame = (stepIndex: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const W = canvas.width;
-    const H = canvas.height;
+    const width = 1080;
+    const height = 1920;
 
-    // Background
-    ctx.fillStyle = "#030712";
-    ctx.fillRect(0, 0, W, H);
-
-    // Top Badge & Title
-    ctx.fillStyle = "#1e293b";
+    // 1. Clear & Background Gradient
     ctx.beginPath();
-    ctx.roundRect(70, 70, 360, 56, 14);
-    ctx.fill();
+    const bgGradient = ctx.createLinearGradient(0, 0, 0, height);
+    bgGradient.addColorStop(0, '#090d16');
+    bgGradient.addColorStop(1, '#040609');
+    ctx.fillStyle = bgGradient;
+    ctx.fillRect(0, 0, width, height);
 
-    ctx.fillStyle = "#38bdf8";
-    ctx.font = "bold 24px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(language.toUpperCase(), 250, 108);
+    // 2. Header
+    ctx.fillStyle = '#58a6ff';
+    ctx.font = 'bold 44px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('CODE REEL VISUALIZER', width / 2, 115);
 
-    // Status Banner
-    ctx.fillStyle = "#0f172a";
-    ctx.beginPath();
-    ctx.roundRect(70, 150, W - 140, 80, 16);
-    ctx.fill();
-
-    ctx.fillStyle = "#f8fafc";
-    ctx.font = "bold 26px sans-serif";
-    ctx.textAlign = "left";
-    const caption = currentStep
-      ? `Step ${currentStep.stepIndex + 1}: ${currentStep.description}`
-      : "Ready";
-    ctx.fillText(caption, 100, 200);
-
-    // Variable Pills
-    if (currentStep?.pointers && currentStep.pointers.length > 0) {
-      renderMiniPills(ctx, currentStep.pointers, W, 255);
+    const step = steps[stepIndex];
+    if (!step) {
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '34px sans-serif';
+      ctx.fillText('Click "Parse & Prepare Reel" to begin', width / 2, height / 2);
+      return;
     }
 
-    // Dynamic Visualizer Area
-    if (currentStep?.layout === "LINKED_LIST" && currentStep.linkedList) {
-      renderLinkedList(ctx, currentStep.linkedList, W, 680);
-    } else if (currentStep?.layout === "SEARCH_GRID" && currentStep.searchGrid) {
-      renderSearchGrid(ctx, currentStep.searchGrid.cells, currentStep.searchGrid.target, W, 680);
-    } else if (currentStep?.layout === "BARS" && currentStep.bars) {
-      renderBars(ctx, currentStep.bars, W, 720);
-    } else if (currentStep?.layout === "STACK" && currentStep.stack) {
-      renderStack(ctx, currentStep.stack, W, 740);
+    // 3. Step Badge
+    ctx.beginPath();
+    ctx.fillStyle = '#1f6feb';
+    if (ctx.roundRect) ctx.roundRect(width / 2 - 250, 155, 500, 60, 30);
+    else ctx.rect(width / 2 - 250, 155, 500, 60);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText(`Step ${stepIndex + 1} of ${steps.length}`, width / 2, 196);
+
+    // 4. DSA Visual Layout Dispatcher
+    const layout = step.layout || 'SEARCH_GRID';
+    const zoneStartY = 280;
+
+    if (layout === 'LINKED_LIST') {
+      renderLinkedList(ctx, step, width, zoneStartY);
+    } else if (layout === 'BARS') {
+      renderBars(ctx, step, width, zoneStartY);
+    } else if (layout === 'STACK_QUEUE') {
+      renderStackQueue(ctx, step, width, zoneStartY);
+    } else if (layout === 'TREE') {
+      renderTree(ctx, step, width, zoneStartY);
+    } else if (layout === 'VARIABLE_WATCH') {
+      renderVariableWatch(ctx, step, width, zoneStartY);
+    } else {
+      renderSearchGrid(ctx, step, width, zoneStartY);
     }
 
-    // Code Frame
-    const codeBoxY = 1040;
-    const codeBoxH = 780;
-    ctx.fillStyle = "#090d16";
+    // 5. Code Execution Trace Window
+    const codeBoxY = 700;
+    const codeBoxHeight = 940;
+    const codeBoxWidth = width - 100;
+    const codeBoxX = 50;
+
     ctx.beginPath();
-    ctx.roundRect(70, codeBoxY, W - 140, codeBoxH, 24);
+    ctx.fillStyle = '#0d1117';
+    ctx.strokeStyle = '#30363d';
+    ctx.lineWidth = 3;
+    if (ctx.roundRect) ctx.roundRect(codeBoxX, codeBoxY, codeBoxWidth, codeBoxHeight, 20);
+    else ctx.rect(codeBoxX, codeBoxY, codeBoxWidth, codeBoxHeight);
     ctx.fill();
-    ctx.strokeStyle = "#1e293b";
-    ctx.lineWidth = 4;
     ctx.stroke();
 
-    // Code Lines Auto-Scroll
-    const maxVisibleLines = 15;
-    const totalLines = codeLines.length;
-    const activeLineNumber = currentStep ? currentStep.line : 1;
+    ctx.fillStyle = '#8b949e';
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('CODE EXECUTION TRACE', codeBoxX + 36, codeBoxY + 54);
 
-    let startIndex = Math.max(0, activeLineNumber - Math.floor(maxVisibleLines / 2) - 1);
-    if (startIndex + maxVisibleLines > totalLines) {
-      startIndex = Math.max(0, totalLines - maxVisibleLines);
+    const lines = (rawCode ? rawCode.split(/\r?\n/) : []).map((l) => l.trimEnd());
+    if (lines.length > 0) {
+      const lineSpacing = 44;
+      const codeStartY = codeBoxY + 115;
+
+      lines.forEach((lineText: string, idx: number) => {
+        const lineY = codeStartY + idx * lineSpacing;
+        if (lineY > codeBoxY + codeBoxHeight - 40) return;
+
+        const isHighlighted = step.line === idx + 1 || step.line === idx;
+        if (isHighlighted) {
+          ctx.beginPath();
+          ctx.fillStyle = 'rgba(56, 139, 253, 0.28)';
+          ctx.fillRect(codeBoxX + 12, lineY - 32, codeBoxWidth - 24, lineSpacing);
+          ctx.fillStyle = '#58a6ff';
+          ctx.font = 'bold 28px monospace';
+          ctx.fillText('>', codeBoxX + 24, lineY);
+        }
+
+        ctx.fillStyle = isHighlighted ? '#ffffff' : '#8b949e';
+        ctx.font = `${isHighlighted ? 'bold ' : ''}26px monospace`;
+        ctx.fillText(lineText, codeBoxX + 60, lineY);
+      });
     }
-    const visibleLines = codeLines.slice(startIndex, startIndex + maxVisibleLines);
 
-    const lineHeight = 48;
-    const codeStartY = codeBoxY + 60;
-
-    // Code Line Rendering with Dedicated Number Column
-    visibleLines.forEach((lineText, idx) => {
-      const lineNum = startIndex + idx + 1;
-      const y = codeStartY + idx * lineHeight;
-      const isActive = lineNum === activeLineNumber;
-
-      if (isActive) {
-        ctx.fillStyle = "rgba(56, 189, 248, 0.2)";
-        ctx.fillRect(74, y - 32, W - 148, lineHeight);
-
-        ctx.fillStyle = "#38bdf8";
-        ctx.fillRect(74, y - 32, 8, lineHeight);
-
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 24px monospace";
-        ctx.textAlign = "left";
-        ctx.fillText("▶", 90, y - 4);
-      }
-
-      // Line number right-aligned in its own gutter
-      ctx.fillStyle = isActive ? "#38bdf8" : "#475569";
-      ctx.font = "bold 24px monospace";
-      ctx.textAlign = "right";
-      ctx.fillText(String(lineNum), 160, y - 4);
-
-      // Vertical separator
-      ctx.fillStyle = "#1e293b";
-      ctx.fillRect(175, y - 32, 2, lineHeight);
-
-      // Indented code text
-      ctx.textAlign = "left";
-      ctx.fillStyle = isActive ? "#ffffff" : "#94a3b8";
-      ctx.font = isActive ? "bold 24px monospace" : "22px monospace";
-      ctx.fillText(lineText, 195, y - 4);
-    });
-  }, [currentStep, code, language]);
-
-  // 1. Linked List: Box Nodes with Next Arrows
-  const renderLinkedList = (
-    ctx: CanvasRenderingContext2D,
-    nodes: LinkedListNode[],
-    canvasWidth: number,
-    centerY: number
-  ) => {
-    const nodeW = 110;
-    const nodeH = 90;
-    const arrowLen = 50;
-    const totalW = nodes.length * nodeW + (nodes.length - 1) * arrowLen;
-    const startX = (canvasWidth - totalW) / 2;
-
-    nodes.forEach((node, idx) => {
-      const x = startX + idx * (nodeW + arrowLen);
-      const y = centerY - nodeH / 2;
-
-      if (node.state === "target") {
-        ctx.fillStyle = "#10b981";
-      } else if (node.state === "active") {
-        ctx.fillStyle = "#facc15";
-      } else {
-        ctx.fillStyle = "#1e293b";
-      }
+    // 6. Bottom Explanation Box
+    const textDesc = step.description || step.explanation;
+    if (textDesc) {
+      const bY = height - 210;
+      const bH = 130;
 
       ctx.beginPath();
-      ctx.roundRect(x, y, nodeW, nodeH, 16);
+      ctx.fillStyle = '#161b22';
+      if (ctx.roundRect) ctx.roundRect(50, bY, width - 100, bH, 16);
+      else ctx.rect(50, bY, width - 100, bH);
       ctx.fill();
-      ctx.strokeStyle = node.state === "active" ? "#facc15" : "#38bdf8";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      ctx.fillStyle = node.state === "active" || node.state === "target" ? "#000000" : "#ffffff";
-      ctx.font = "bold 32px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(String(node.value), x + nodeW / 2, y + nodeH / 2 + 10);
-
-      if (node.next) {
-        const arrowStartX = x + nodeW + 6;
-        const arrowEndX = arrowStartX + arrowLen - 12;
-        const arrowY = centerY;
-
-        ctx.strokeStyle = "#38bdf8";
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(arrowStartX, arrowY);
-        ctx.lineTo(arrowEndX, arrowY);
-        ctx.stroke();
-
-        ctx.fillStyle = "#38bdf8";
-        ctx.beginPath();
-        ctx.moveTo(arrowEndX, arrowY - 8);
-        ctx.lineTo(arrowEndX + 10, arrowY);
-        ctx.lineTo(arrowEndX, arrowY + 8);
-        ctx.fill();
-      }
-    });
-  };
-
-  // 2. Search Array Box Grid Visualizer
-  const renderSearchGrid = (
-    ctx: CanvasRenderingContext2D,
-    cells: SearchCell[],
-    target: number | string,
-    canvasWidth: number,
-    centerY: number
-  ) => {
-    // Target Badge
-    ctx.fillStyle = "#1e293b";
-    ctx.beginPath();
-    ctx.roundRect((canvasWidth - 340) / 2, centerY - 170, 340, 60, 14);
-    ctx.fill();
-    ctx.strokeStyle = "#38bdf8";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.fillStyle = "#94a3b8";
-    ctx.font = "24px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("TARGET:", (canvasWidth - 340) / 2 + 30, centerY - 132);
-
-    ctx.fillStyle = "#38bdf8";
-    ctx.font = "bold 30px monospace";
-    ctx.fillText(String(target), (canvasWidth - 340) / 2 + 180, centerY - 131);
-
-    // Array Cell Boxes
-    const cellW = Math.min(105, (canvasWidth - 180) / cells.length);
-    const cellH = 100;
-    const totalW = cells.length * cellW;
-    const startX = (canvasWidth - totalW) / 2;
-
-    cells.forEach((cell, idx) => {
-      const x = startX + idx * cellW;
-      const y = centerY;
-
-      if (cell.state === "found") {
-        ctx.fillStyle = "#10b981";
-      } else if (cell.state === "active") {
-        ctx.fillStyle = "#facc15";
-      } else if (cell.state === "checked") {
-        ctx.fillStyle = "#334155";
-      } else {
-        ctx.fillStyle = "#1e293b";
-      }
-
-      ctx.beginPath();
-      ctx.roundRect(x + 4, y, cellW - 8, cellH, 14);
-      ctx.fill();
-      ctx.strokeStyle = cell.state === "active" ? "#facc15" : cell.state === "found" ? "#10b981" : "#475569";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      ctx.fillStyle = cell.state === "active" || cell.state === "found" ? "#000000" : "#ffffff";
-      ctx.font = "bold 32px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(String(cell.value), x + cellW / 2, y + 60);
-
-      // Cell Index
-      ctx.fillStyle = "#64748b";
-      ctx.font = "20px monospace";
-      ctx.fillText(`[${idx}]`, x + cellW / 2, y - 14);
-
-      // Pointer Labels (low, mid, high)
-      if (cell.pointerLabel) {
-        ctx.fillStyle = "#38bdf8";
-        ctx.font = "bold 22px sans-serif";
-        ctx.fillText(`▲ ${cell.pointerLabel}`, x + cellW / 2, y + cellH + 34);
-      }
-    });
-  };
-
-  // 3. Vertical Bars for Sorting
-  const renderBars = (
-    ctx: CanvasRenderingContext2D,
-    bars: { value: number; label?: string; state?: string }[],
-    canvasWidth: number,
-    centerY: number
-  ) => {
-    const maxVal = Math.max(...bars.map((b) => b.value), 10);
-    const barWidth = Math.min(100, (canvasWidth - 240) / bars.length);
-    const totalWidth = bars.length * barWidth;
-    const startX = (canvasWidth - totalWidth) / 2;
-
-    bars.forEach((item, idx) => {
-      const barHeight = Math.max(45, (item.value / maxVal) * 360);
-      const x = startX + idx * barWidth;
-      const y = centerY + 160 - barHeight;
-
-      if (item.state === "swap") {
-        ctx.fillStyle = "#ef4444";
-      } else if (item.state === "active") {
-        ctx.fillStyle = "#facc15";
-      } else if (item.state === "done") {
-        ctx.fillStyle = "#10b981";
-      } else {
-        const grad = ctx.createLinearGradient(x, y, x, y + barHeight);
-        grad.addColorStop(0, "#38bdf8");
-        grad.addColorStop(1, "#0284c7");
-        ctx.fillStyle = grad;
-      }
-
-      ctx.beginPath();
-      ctx.roundRect(x + 6, y, barWidth - 12, barHeight, 14);
-      ctx.fill();
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 32px monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(String(item.value), x + barWidth / 2, y - 18);
-    });
-  };
-
-  // 4. Call Stack for Recursion
-  const renderStack = (
-    ctx: CanvasRenderingContext2D,
-    stack: { name: string; value: string | number }[],
-    canvasWidth: number,
-    baseY: number
-  ) => {
-    const frameHeight = 65;
-    const frameWidth = 480;
-    const startX = (canvasWidth - frameWidth) / 2;
-
-    ctx.fillStyle = "#38bdf8";
-    ctx.font = "bold 26px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText("CALL STACK FRAMES", canvasWidth / 2, baseY - 420);
-
-    stack.forEach((frame, idx) => {
-      const y = baseY - (idx + 1) * (frameHeight + 12);
-      ctx.fillStyle = "#1e293b";
-      ctx.beginPath();
-      ctx.roundRect(startX, y, frameWidth, frameHeight, 14);
-      ctx.fill();
-
-      ctx.strokeStyle = idx === stack.length - 1 ? "#38bdf8" : "#334155";
+      ctx.strokeStyle = '#30363d';
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      ctx.fillStyle = "#38bdf8";
-      ctx.font = "bold 24px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(frame.name, startX + 24, y + 42);
+      ctx.fillStyle = '#7ee787';
+      ctx.font = 'bold 28px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
 
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "24px monospace";
-      ctx.textAlign = "right";
-      ctx.fillText(String(frame.value), startX + frameWidth - 24, y + 42);
-    });
+      if (textDesc.length > 46) {
+        const splitPoint = textDesc.lastIndexOf(' ', 46);
+        ctx.fillText(textDesc.substring(0, splitPoint), width / 2, bY + 52);
+        ctx.fillText(textDesc.substring(splitPoint + 1), width / 2, bY + 98);
+      } else {
+        ctx.fillText(textDesc, width / 2, bY + 75);
+      }
+    }
   };
 
-  // Mini Badges
-  const renderMiniPills = (
-    ctx: CanvasRenderingContext2D,
-    pointers: { name: string; value: string | number }[],
-    canvasWidth: number,
-    yPos: number
-  ) => {
-    const pillWidth = 240;
-    const gap = 16;
-    const visiblePointers = pointers.slice(0, 4);
-    const totalWidth = visiblePointers.length * pillWidth + (visiblePointers.length - 1) * gap;
-    const startX = Math.max(70, (canvasWidth - totalWidth) / 2);
+  // --- Layout 1: Linked List ---
+  function renderLinkedList(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
+    const list = step.array || [10, 20, 30, 40];
+    const nodeW = 130;
+    const nodeH = 85;
+    const arrowW = 55;
+    const totalW = list.length * (nodeW + arrowW) + 90;
+    const startX = Math.max(40, (width - totalW) / 2);
 
-    visiblePointers.forEach((p, idx) => {
-      const x = startX + idx * (pillWidth + gap);
-      ctx.fillStyle = "#1e293b";
+    list.forEach((val, idx) => {
+      const x = startX + idx * (nodeW + arrowW);
+      const isActive = idx === step.currentIndex;
+
       ctx.beginPath();
-      ctx.roundRect(x, yPos, pillWidth, 58, 14);
+      ctx.fillStyle = isActive ? '#238636' : '#161b22';
+      if (ctx.roundRect) ctx.roundRect(x, startY + 40, nodeW, nodeH, 14);
+      else ctx.rect(x, startY + 40, nodeW, nodeH);
+      ctx.fill();
+      ctx.strokeStyle = isActive ? '#3fb950' : '#30363d';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + nodeW * 0.65, startY + 40);
+      ctx.lineTo(x + nodeW * 0.65, startY + 40 + nodeH);
+      ctx.strokeStyle = '#30363d';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 34px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(val), x + (nodeW * 0.65) / 2, startY + 40 + nodeH / 2 + 12);
+
+      ctx.beginPath();
+      ctx.arc(x + nodeW * 0.82, startY + 40 + nodeH / 2, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#58a6ff';
       ctx.fill();
 
-      ctx.fillStyle = "#94a3b8";
-      ctx.font = "22px sans-serif";
-      ctx.textAlign = "left";
-      ctx.fillText(`${p.name}:`, x + 20, yPos + 36);
+      // Arrow
+      const arrowStartX = x + nodeW;
+      const arrowEndX = arrowStartX + arrowW;
+      const arrowY = startY + 40 + nodeH / 2;
+      ctx.beginPath();
+      ctx.moveTo(arrowStartX, arrowY);
+      ctx.lineTo(arrowEndX, arrowY);
+      ctx.strokeStyle = '#58a6ff';
+      ctx.lineWidth = 4;
+      ctx.stroke();
 
-      ctx.fillStyle = "#38bdf8";
-      ctx.font = "bold 26px monospace";
-      ctx.fillText(String(p.value), x + 115, yPos + 38);
+      if (isActive) {
+        ctx.fillStyle = '#3fb950';
+        ctx.font = 'bold 34px sans-serif';
+        ctx.fillText('▲', x + nodeW / 2, startY + 40 + nodeH + 50);
+        ctx.font = 'bold 24px monospace';
+        ctx.fillText('temp', x + nodeW / 2, startY + 40 + nodeH + 85);
+      }
     });
+
+    const nullX = startX + list.length * (nodeW + arrowW) + 10;
+    ctx.fillStyle = '#f85149';
+    ctx.font = 'bold 32px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('NULL', nullX, startY + 40 + nodeH / 2 + 10);
+  }
+
+  // --- Layout 2: Sorting Bars ---
+  function renderBars(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
+    const arr = (step.array as number[]) || [64, 34, 25, 12, 22, 11];
+    const maxVal = Math.max(...arr, 70);
+    const barW = Math.min(80, Math.floor((width - 160) / arr.length));
+    const gap = 16;
+    const totalW = arr.length * barW + (arr.length - 1) * gap;
+    const startX = (width - totalW) / 2;
+    const maxBarH = 240;
+
+    arr.forEach((val, idx) => {
+      const x = startX + idx * (barW + gap);
+      const barH = (val / maxVal) * maxBarH;
+      const y = startY + 280 - barH;
+      const isCompared = step.comparedIndices?.includes(idx);
+
+      ctx.beginPath();
+      ctx.fillStyle = isCompared ? '#da3633' : '#1f6feb';
+      if (ctx.roundRect) ctx.roundRect(x, y, barW, barH, [10, 10, 0, 0]);
+      else ctx.rect(x, y, barW, barH);
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 30px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(val), x + barW / 2, y - 12);
+    });
+  }
+
+  // --- Layout 3: Stack & Queue ---
+  function renderStackQueue(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
+    const isQueue = Boolean(step.queue && step.queue.length > 0);
+    const items = isQueue ? step.queue! : (step.stack || [10, 20, 30]);
+
+    ctx.fillStyle = '#58a6ff';
+    ctx.font = 'bold 32px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(isQueue ? 'QUEUE (FIFO) CONVEYOR' : 'STACK (LIFO) CHAMBER', width / 2, startY + 20);
+
+    const boxW = 120;
+    const boxH = 65;
+    const gap = 12;
+
+    if (isQueue) {
+      const totalW = items.length * (boxW + gap);
+      const startX = (width - totalW) / 2;
+      items.forEach((item, idx) => {
+        const x = startX + idx * (boxW + gap);
+        ctx.beginPath();
+        ctx.fillStyle = '#161b22';
+        if (ctx.roundRect) ctx.roundRect(x, startY + 80, boxW, boxH, 12);
+        else ctx.rect(x, startY + 80, boxW, boxH);
+        ctx.fill();
+        ctx.strokeStyle = '#58a6ff';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 34px monospace';
+        ctx.fillText(String(item), x + boxW / 2, startY + 80 + boxH / 2 + 12);
+      });
+    } else {
+      // Vertical Stack
+      items.forEach((item, idx) => {
+        const y = startY + 260 - idx * (boxH + gap);
+        const x = (width - 240) / 2;
+        ctx.beginPath();
+        ctx.fillStyle = idx === items.length - 1 ? '#238636' : '#161b22';
+        if (ctx.roundRect) ctx.roundRect(x, y, 240, boxH, 10);
+        else ctx.rect(x, y, 240, boxH);
+        ctx.fill();
+        ctx.strokeStyle = '#30363d';
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 32px monospace';
+        ctx.fillText(String(item), width / 2, y + boxH / 2 + 10);
+      });
+    }
+  }
+
+  // --- Layout 4: Tree Structure ---
+  function renderTree(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
+    const nodes = step.treeNodes || [];
+    // Draw branches
+    if (nodes.length > 1) {
+      ctx.strokeStyle = '#30363d';
+      ctx.lineWidth = 4;
+      for (let i = 1; i < nodes.length; i++) {
+        const parentIdx = Math.floor((i - 1) / 2);
+        const p = nodes[parentIdx];
+        const child = nodes[i];
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(child.x, child.y);
+        ctx.stroke();
+      }
+    }
+
+    // Draw nodes
+    nodes.forEach((n) => {
+      const isActive = n.val === step.activeNodeVal;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, 36, 0, Math.PI * 2);
+      ctx.fillStyle = isActive ? '#238636' : '#161b22';
+      ctx.fill();
+      ctx.strokeStyle = isActive ? '#3fb950' : '#58a6ff';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 28px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(n.val), n.x, n.y + 10);
+    });
+  }
+
+  // --- Layout 5: Search Grid ---
+  function renderSearchGrid(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
+    const arr = step.array || [10, 20, 30, 40, 50];
+    const boxSize = Math.min(140, Math.floor((width - 120) / arr.length) - 14);
+    const gap = 14;
+    const totalW = arr.length * boxSize + (arr.length - 1) * gap;
+    const startX = (width - totalW) / 2;
+
+    arr.forEach((val, idx) => {
+      const x = startX + idx * (boxSize + gap);
+      const isMatch = idx === step.foundIndex;
+      const isActive = idx === step.currentIndex;
+
+      ctx.beginPath();
+      ctx.fillStyle = isMatch ? '#238636' : isActive ? '#da3633' : '#161b22';
+      if (ctx.roundRect) ctx.roundRect(x, startY + 60, boxSize, boxSize, 16);
+      else ctx.rect(x, startY + 60, boxSize, boxSize);
+      ctx.fill();
+      ctx.strokeStyle = isMatch || isActive ? '#ffffff' : '#30363d';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 44px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(val), x + boxSize / 2, startY + 60 + boxSize / 2 + 16);
+
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '26px monospace';
+      ctx.fillText(`[${idx}]`, x + boxSize / 2, startY + 60 + boxSize + 40);
+
+      if (isActive) {
+        ctx.fillStyle = '#58a6ff';
+        ctx.font = 'bold 40px sans-serif';
+        ctx.fillText('▲', x + boxSize / 2, startY + 60 + boxSize + 88);
+      }
+    });
+  }
+
+  // --- Layout 6: Variable Watch ---
+  function renderVariableWatch(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
+    const vars = step.variables || { status: 'Running' };
+    ctx.fillStyle = '#e3b341';
+    ctx.font = 'bold 34px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('LIVE MEMORY & STATE WATCHER', width / 2, startY + 30);
+
+    let vY = startY + 90;
+    Object.entries(vars).forEach(([k, v]) => {
+      ctx.beginPath();
+      ctx.fillStyle = '#161b22';
+      if (ctx.roundRect) ctx.roundRect((width - 600) / 2, vY, 600, 60, 10);
+      else ctx.rect((width - 600) / 2, vY, 600, 60);
+      ctx.fill();
+      ctx.strokeStyle = '#30363d';
+      ctx.stroke();
+
+      ctx.fillStyle = '#58a6ff';
+      ctx.font = 'bold 28px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${k}:`, (width - 550) / 2, vY + 40);
+
+      ctx.fillStyle = '#7ee787';
+      ctx.textAlign = 'right';
+      ctx.fillText(String(v), (width + 550) / 2, vY + 40);
+      vY += 75;
+    });
+  }
+
+  useEffect(() => {
+    drawFrame(currentStepIdx);
+  }, [currentStepIdx, steps, rawCode]);
+
+  useEffect(() => {
+    let timeoutId: any;
+    if (isPlaying) {
+      if (currentStepIdx < steps.length - 1) {
+        timeoutId = setTimeout(() => {
+          setCurrentStepIdx((prev) => prev + 1);
+        }, 1000);
+      } else {
+        setIsPlaying(false);
+      }
+    }
+    return () => clearTimeout(timeoutId);
+  }, [isPlaying, currentStepIdx, steps.length]);
+
+  const handleStartRecording = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || steps.length === 0) return;
+
+    recordedChunksRef.current = [];
+    setCurrentStepIdx(0);
+
+    const stream = canvas.captureStream(30);
+    const options = { mimeType: 'video/webm;codecs=vp9' };
+    const recorder = new MediaRecorder(
+      stream,
+      MediaRecorder.isTypeSupported(options.mimeType) ? options : undefined
+    );
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = () => {
+      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'code-reel-9x16.webm';
+      a.click();
+      URL.revokeObjectURL(url);
+      setIsRecording(false);
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+    setIsRecording(true);
+    setIsPlaying(true);
+  };
+
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsPlaying(false);
   };
 
   return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", width: "100%", height: "100%" }}>
-      <canvas
-        ref={canvasRef}
-        width={1080}
-        height={1920}
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        width: '100%',
+        boxSizing: 'border-box',
+        gap: '14px',
+      }}
+    >
+      <div
         style={{
-          height: "85vh",
-          aspectRatio: "9/16",
-          borderRadius: "24px",
-          boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.7)"
+          position: 'relative',
+          width: '100%',
+          maxWidth: isMobile ? '280px' : '340px',
+          aspectRatio: '9 / 16',
+          backgroundColor: '#000000',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          boxShadow: '0 8px 30px rgba(0, 0, 0, 0.7)',
+          border: '1px solid #30363d',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
         }}
-      />
+      >
+        <canvas
+          ref={canvasRef}
+          width={1080}
+          height={1920}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            display: 'block',
+          }}
+        />
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '8px',
+          width: '100%',
+          maxWidth: isMobile ? '280px' : '340px',
+          justifyContent: 'center',
+        }}
+      >
+        <button
+          onClick={() => setIsPlaying(!isPlaying)}
+          disabled={steps.length === 0}
+          style={{
+            flex: '1 1 calc(50% - 4px)',
+            padding: '10px',
+            backgroundColor: isPlaying ? '#d29922' : '#238636',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '6px',
+            fontWeight: 600,
+            fontSize: '0.85rem',
+            cursor: steps.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: steps.length === 0 ? 0.5 : 1,
+          }}
+        >
+          {isPlaying ? 'Pause' : 'Play'}
+        </button>
+
+        <button
+          onClick={() => {
+            setIsPlaying(false);
+            setCurrentStepIdx(0);
+          }}
+          disabled={steps.length === 0}
+          style={{
+            flex: '1 1 calc(50% - 4px)',
+            padding: '10px',
+            backgroundColor: '#21262d',
+            color: '#c9d1d9',
+            border: '1px solid #30363d',
+            borderRadius: '6px',
+            fontWeight: 600,
+            fontSize: '0.85rem',
+            cursor: steps.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: steps.length === 0 ? 0.5 : 1,
+          }}
+        >
+          Reset
+        </button>
+
+        <button
+          onClick={isRecording ? handleStopRecording : handleStartRecording}
+          disabled={steps.length === 0}
+          style={{
+            flex: '1 1 100%',
+            padding: '12px',
+            backgroundColor: isRecording ? '#da3633' : '#1f6feb',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '6px',
+            fontWeight: 700,
+            fontSize: '0.85rem',
+            cursor: steps.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: steps.length === 0 ? 0.5 : 1,
+          }}
+        >
+          {isRecording ? 'Stop & Download Reel' : 'Record 9:16 Reel'}
+        </button>
+      </div>
     </div>
   );
-};
+}
