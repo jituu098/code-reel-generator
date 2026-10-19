@@ -52,7 +52,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
       return;
     }
 
-    // 3. Step Badge
+    // 3. Step Status Badge
     ctx.beginPath();
     ctx.fillStyle = '#1f6feb';
     if (ctx.roundRect) ctx.roundRect(width / 2 - 250, 155, 500, 60, 30);
@@ -81,9 +81,9 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
       renderSearchGrid(ctx, step, width, zoneStartY);
     }
 
-    // 5. Code Execution Trace Window
-    const codeBoxY = 700;
-    const codeBoxHeight = 940;
+    // 5. Code Execution Trace Window with Synchronized Highlighting
+    const codeBoxY = 680;
+    const codeBoxHeight = 960;
     const codeBoxWidth = width - 100;
     const codeBoxX = 50;
 
@@ -96,34 +96,59 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     ctx.fill();
     ctx.stroke();
 
+    // Trace header
     ctx.fillStyle = '#8b949e';
-    ctx.font = 'bold 28px monospace';
+    ctx.font = 'bold 26px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('CODE EXECUTION TRACE', codeBoxX + 36, codeBoxY + 54);
+    ctx.fillText('CODE EXECUTION TRACE', codeBoxX + 36, codeBoxY + 50);
+
+    ctx.fillStyle = '#58a6ff';
+    ctx.font = 'bold 22px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`Active Line: ${step.line}`, codeBoxX + codeBoxWidth - 36, codeBoxY + 50);
 
     const lines = (rawCode ? rawCode.split(/\r?\n/) : []).map((l) => l.trimEnd());
     if (lines.length > 0) {
-      const lineSpacing = 44;
-      const codeStartY = codeBoxY + 115;
+      const lineSpacing = 46;
+      const activeLineIdx = step.line - 1;
+      const visibleLinesCount = 18;
+      let startIdx = 0;
+      if (lines.length > visibleLinesCount && activeLineIdx > 8) {
+        startIdx = Math.min(activeLineIdx - 8, lines.length - visibleLinesCount);
+      }
+      const endIdx = Math.min(startIdx + visibleLinesCount, lines.length);
 
-      lines.forEach((lineText: string, idx: number) => {
-        const lineY = codeStartY + idx * lineSpacing;
-        if (lineY > codeBoxY + codeBoxHeight - 40) return;
+      const codeStartY = codeBoxY + 110;
 
-        const isHighlighted = step.line === idx + 1 || step.line === idx;
+      for (let idx = startIdx; idx < endIdx; idx++) {
+        const displayRow = idx - startIdx;
+        const lineY = codeStartY + displayRow * lineSpacing;
+        const isHighlighted = idx === activeLineIdx;
+
         if (isHighlighted) {
           ctx.beginPath();
-          ctx.fillStyle = 'rgba(56, 139, 253, 0.28)';
+          ctx.fillStyle = 'rgba(56, 139, 253, 0.35)';
           ctx.fillRect(codeBoxX + 12, lineY - 32, codeBoxWidth - 24, lineSpacing);
+
           ctx.fillStyle = '#58a6ff';
-          ctx.font = 'bold 28px monospace';
-          ctx.fillText('>', codeBoxX + 24, lineY);
+          ctx.fillRect(codeBoxX + 12, lineY - 32, 6, lineSpacing);
+
+          ctx.fillStyle = '#58a6ff';
+          ctx.font = 'bold 30px monospace';
+          ctx.textAlign = 'left';
+          ctx.fillText('▶', codeBoxX + 24, lineY);
         }
+
+        ctx.fillStyle = isHighlighted ? '#58a6ff' : '#484f58';
+        ctx.font = 'bold 22px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(String(idx + 1), codeBoxX + 68, lineY);
 
         ctx.fillStyle = isHighlighted ? '#ffffff' : '#8b949e';
         ctx.font = `${isHighlighted ? 'bold ' : ''}26px monospace`;
-        ctx.fillText(lineText, codeBoxX + 60, lineY);
-      });
+        ctx.textAlign = 'left';
+        ctx.fillText(lines[idx], codeBoxX + 88, lineY);
+      }
     }
 
     // 6. Bottom Explanation Box
@@ -155,14 +180,14 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     }
   };
 
-  // --- Layout 1: Linked List ---
+  // --- Layout: Linked List ---
   function renderLinkedList(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const list = step.array || [10, 20, 30, 40];
-    const nodeW = 130;
-    const nodeH = 85;
-    const arrowW = 55;
+    const list = step.array || [10, 20, 30];
+    const nodeW = 140;
+    const nodeH = 90;
+    const arrowW = 60;
     const totalW = list.length * (nodeW + arrowW) + 90;
-    const startX = Math.max(40, (width - totalW) / 2);
+    const startX = Math.max(50, (width - totalW) / 2);
 
     list.forEach((val, idx) => {
       const x = startX + idx * (nodeW + arrowW);
@@ -185,12 +210,12 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
       ctx.stroke();
 
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 34px monospace';
+      ctx.font = 'bold 36px monospace';
       ctx.textAlign = 'center';
       ctx.fillText(String(val), x + (nodeW * 0.65) / 2, startY + 40 + nodeH / 2 + 12);
 
       ctx.beginPath();
-      ctx.arc(x + nodeW * 0.82, startY + 40 + nodeH / 2, 6, 0, Math.PI * 2);
+      ctx.arc(x + nodeW * 0.82, startY + 40 + nodeH / 2, 7, 0, Math.PI * 2);
       ctx.fillStyle = '#58a6ff';
       ctx.fill();
 
@@ -205,25 +230,33 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
       ctx.lineWidth = 4;
       ctx.stroke();
 
+      ctx.beginPath();
+      ctx.moveTo(arrowEndX - 10, arrowY - 8);
+      ctx.lineTo(arrowEndX, arrowY);
+      ctx.lineTo(arrowEndX - 10, arrowY + 8);
+      ctx.fillStyle = '#58a6ff';
+      ctx.fill();
+
+      // Pointer marker
       if (isActive) {
         ctx.fillStyle = '#3fb950';
-        ctx.font = 'bold 34px sans-serif';
-        ctx.fillText('▲', x + nodeW / 2, startY + 40 + nodeH + 50);
-        ctx.font = 'bold 24px monospace';
-        ctx.fillText('temp', x + nodeW / 2, startY + 40 + nodeH + 85);
+        ctx.font = 'bold 36px sans-serif';
+        ctx.fillText('▲', x + nodeW / 2, startY + 40 + nodeH + 46);
+        ctx.font = 'bold 26px monospace';
+        ctx.fillText('temp', x + nodeW / 2, startY + 40 + nodeH + 82);
       }
     });
 
     const nullX = startX + list.length * (nodeW + arrowW) + 10;
     ctx.fillStyle = '#f85149';
-    ctx.font = 'bold 32px monospace';
+    ctx.font = 'bold 34px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('NULL', nullX, startY + 40 + nodeH / 2 + 10);
+    ctx.fillText('NULL', nullX, startY + 40 + nodeH / 2 + 12);
   }
 
-  // --- Layout 2: Sorting Bars ---
+  // --- Layout: Sorting Bars ---
   function renderBars(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const arr = (step.array as number[]) || [64, 34, 25, 12, 22, 11];
+    const arr = (step.array as number[]) || [64, 34, 25, 12, 22];
     const maxVal = Math.max(...arr, 70);
     const barW = Math.min(80, Math.floor((width - 160) / arr.length));
     const gap = 16;
@@ -250,7 +283,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     });
   }
 
-  // --- Layout 3: Stack & Queue ---
+  // --- Layout: Stack & Queue ---
   function renderStackQueue(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
     const isQueue = Boolean(step.queue && step.queue.length > 0);
     const items = isQueue ? step.queue! : (step.stack || [10, 20, 30]);
@@ -283,7 +316,6 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
         ctx.fillText(String(item), x + boxW / 2, startY + 80 + boxH / 2 + 12);
       });
     } else {
-      // Vertical Stack
       items.forEach((item, idx) => {
         const y = startY + 260 - idx * (boxH + gap);
         const x = (width - 240) / 2;
@@ -302,10 +334,9 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     }
   }
 
-  // --- Layout 4: Tree Structure ---
+  // --- Layout: Tree Structure ---
   function renderTree(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
     const nodes = step.treeNodes || [];
-    // Draw branches
     if (nodes.length > 1) {
       ctx.strokeStyle = '#30363d';
       ctx.lineWidth = 4;
@@ -320,7 +351,6 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
       }
     }
 
-    // Draw nodes
     nodes.forEach((n) => {
       const isActive = n.val === step.activeNodeVal;
       ctx.beginPath();
@@ -338,7 +368,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     });
   }
 
-  // --- Layout 5: Search Grid ---
+  // --- Layout: Search Grid ---
   function renderSearchGrid(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
     const arr = step.array || [10, 20, 30, 40, 50];
     const boxSize = Math.min(140, Math.floor((width - 120) / arr.length) - 14);
@@ -377,7 +407,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     });
   }
 
-  // --- Layout 6: Variable Watch ---
+  // --- Layout: Variable Watch ---
   function renderVariableWatch(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
     const vars = step.variables || { status: 'Running' };
     ctx.fillStyle = '#e3b341';
@@ -417,7 +447,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
       if (currentStepIdx < steps.length - 1) {
         timeoutId = setTimeout(() => {
           setCurrentStepIdx((prev) => prev + 1);
-        }, 1000);
+        }, 1100);
       } else {
         setIsPlaying(false);
       }
