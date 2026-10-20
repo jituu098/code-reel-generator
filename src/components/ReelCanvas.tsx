@@ -13,14 +13,67 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
 
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
+
+  // Sound Engine Setup
+  const initAudio = () => {
+    if (!audioCtxRef.current) {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const dest = ctx.createMediaStreamDestination();
+      audioCtxRef.current = ctx;
+      audioDestinationRef.current = dest;
+    }
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume();
+    }
+  };
+
+  const playMechanicalTick = (isSwap = false) => {
+    if (!audioCtxRef.current || !audioDestinationRef.current) return;
+    const ctx = audioCtxRef.current;
+    const dest = audioDestinationRef.current;
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    if (isSwap) {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(160, now);
+      osc.frequency.exponentialRampToValueAtTime(50, now + 0.08);
+
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.connect(dest);
+      osc.start(now);
+      osc.stop(now + 0.08);
+    } else {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.exponentialRampToValueAtTime(140, now + 0.04);
+
+      gain.gain.setValueAtTime(0.18, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.connect(dest);
+      osc.start(now);
+      osc.stop(now + 0.04);
+    }
+  };
 
   useEffect(() => {
     setCurrentStepIdx(0);
     setIsPlaying(false);
   }, [steps]);
 
+  // Main Canvas Rendering
   const drawFrame = (stepIndex: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -30,447 +83,376 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     const width = 1080;
     const height = 1920;
 
-    // 1. Clear & Background Gradient
-    ctx.beginPath();
-    const bgGradient = ctx.createLinearGradient(0, 0, 0, height);
-    bgGradient.addColorStop(0, '#090d16');
-    bgGradient.addColorStop(1, '#040609');
-    ctx.fillStyle = bgGradient;
+    // 1. Grid Background
+    ctx.fillStyle = '#0a1626';
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Header
-    ctx.fillStyle = '#58a6ff';
-    ctx.font = 'bold 44px -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('CODE REEL VISUALIZER', width / 2, 115);
+    ctx.strokeStyle = 'rgba(24, 52, 89, 0.45)';
+    ctx.lineWidth = 1.5;
+    const gridSize = 44;
+    for (let x = 0; x < width; x += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    for (let y = 0; y < height; y += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
 
     const step = steps[stepIndex];
+
+    // 2. Title & Algorithm Category
+    ctx.fillStyle = '#f0f6fc';
+    ctx.font = '900 52px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.letterSpacing = '3px';
+    const title = step?.layout === 'SORTING_QUICK' ? 'QUICK SORT' : 'BUBBLE SORT';
+    ctx.fillText(title, width / 2, 130);
+
+    ctx.fillStyle = '#58a6ff';
+    ctx.font = 'bold 22px -apple-system, sans-serif';
+    ctx.letterSpacing = '4px';
+    ctx.fillText('ORDENACIÓN POR INTERCAMBIO', width / 2, 170);
+
     if (!step) {
       ctx.fillStyle = '#8b949e';
-      ctx.font = '34px sans-serif';
+      ctx.font = '34px monospace';
       ctx.fillText('Click "Parse & Prepare Reel" to begin', width / 2, height / 2);
       return;
     }
 
-    // 3. Step Status Badge
+    // 3. Digital HUD Boxes (COMPARA & CAMBIA)
+    const hudW = 280;
+    const hudH = 68;
+    const hudY = 215;
+
+    // Left HUD (COMPARA)
     ctx.beginPath();
-    ctx.fillStyle = '#1f6feb';
-    if (ctx.roundRect) ctx.roundRect(width / 2 - 250, 155, 500, 60, 30);
-    else ctx.rect(width / 2 - 250, 155, 500, 60);
+    ctx.fillStyle = '#0d1f36';
+    if (ctx.roundRect) ctx.roundRect(width / 2 - hudW - 16, hudY, hudW, hudH, 14);
+    else ctx.rect(width / 2 - hudW - 16, hudY, hudW, hudH);
     ctx.fill();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 28px sans-serif';
-    ctx.fillText(`Step ${stepIndex + 1} of ${steps.length}`, width / 2, 196);
-
-    // 4. DSA Visual Layout Dispatcher
-    const layout = step.layout || 'SEARCH_GRID';
-    const zoneStartY = 280;
-
-    if (layout === 'LINKED_LIST') {
-      renderLinkedList(ctx, step, width, zoneStartY);
-    } else if (layout === 'BARS') {
-      renderBars(ctx, step, width, zoneStartY);
-    } else if (layout === 'STACK_QUEUE') {
-      renderStackQueue(ctx, step, width, zoneStartY);
-    } else if (layout === 'TREE') {
-      renderTree(ctx, step, width, zoneStartY);
-    } else if (layout === 'VARIABLE_WATCH') {
-      renderVariableWatch(ctx, step, width, zoneStartY);
-    } else {
-      renderSearchGrid(ctx, step, width, zoneStartY);
-    }
-
-    // 5. Code Execution Trace Window with Synchronized Highlighting
-    const codeBoxY = 680;
-    const codeBoxHeight = 960;
-    const codeBoxWidth = width - 100;
-    const codeBoxX = 50;
-
-    ctx.beginPath();
-    ctx.fillStyle = '#0d1117';
-    ctx.strokeStyle = '#30363d';
-    ctx.lineWidth = 3;
-    if (ctx.roundRect) ctx.roundRect(codeBoxX, codeBoxY, codeBoxWidth, codeBoxHeight, 20);
-    else ctx.rect(codeBoxX, codeBoxY, codeBoxWidth, codeBoxHeight);
-    ctx.fill();
+    ctx.strokeStyle = '#1b3b66';
+    ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Trace header
     ctx.fillStyle = '#8b949e';
-    ctx.font = 'bold 26px monospace';
+    ctx.font = 'bold 22px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('CODE EXECUTION TRACE', codeBoxX + 36, codeBoxY + 50);
+    ctx.fillText('COMPARA', width / 2 - hudW + 8, hudY + 44);
 
     ctx.fillStyle = '#58a6ff';
-    ctx.font = 'bold 22px monospace';
+    ctx.font = 'bold 36px monospace';
     ctx.textAlign = 'right';
-    ctx.fillText(`Active Line: ${step.line}`, codeBoxX + codeBoxWidth - 36, codeBoxY + 50);
+    ctx.fillText(String(step.comparisonsCount ?? 0), width / 2 - 36, hudY + 46);
 
-    const lines = (rawCode ? rawCode.split(/\r?\n/) : []).map((l) => l.trimEnd());
-    if (lines.length > 0) {
-      const lineSpacing = 46;
-      const activeLineIdx = step.line - 1;
-      const visibleLinesCount = 18;
-      let startIdx = 0;
-      if (lines.length > visibleLinesCount && activeLineIdx > 8) {
-        startIdx = Math.min(activeLineIdx - 8, lines.length - visibleLinesCount);
-      }
-      const endIdx = Math.min(startIdx + visibleLinesCount, lines.length);
+    // Right HUD (CAMBIA)
+    ctx.beginPath();
+    ctx.fillStyle = '#0d1f36';
+    if (ctx.roundRect) ctx.roundRect(width / 2 + 16, hudY, hudW, hudH, 14);
+    else ctx.rect(width / 2 + 16, hudY, hudW, hudH);
+    ctx.fill();
+    ctx.strokeStyle = '#1b3b66';
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
-      const codeStartY = codeBoxY + 110;
+    ctx.fillStyle = '#8b949e';
+    ctx.font = 'bold 22px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('CAMBIA', width / 2 + 36, hudY + 44);
 
-      for (let idx = startIdx; idx < endIdx; idx++) {
-        const displayRow = idx - startIdx;
-        const lineY = codeStartY + displayRow * lineSpacing;
-        const isHighlighted = idx === activeLineIdx;
+    ctx.fillStyle = '#e3b341';
+    ctx.font = 'bold 36px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(String(step.swapsCount ?? 0), width / 2 + hudW - 4, hudY + 46);
 
-        if (isHighlighted) {
-          ctx.beginPath();
-          ctx.fillStyle = 'rgba(56, 139, 253, 0.35)';
-          ctx.fillRect(codeBoxX + 12, lineY - 32, codeBoxWidth - 24, lineSpacing);
+    // 4. Bar Elements & Dual-Claw Overhead Crane
+    const arr = step.array || [50, 20, 40, 10, 30];
+    const n = arr.length;
+    const chartBottomY = 580;
+    const maxVal = Math.max(...arr, 50);
+    const maxBarH = 210;
+    const barW = Math.min(84, Math.floor((width - 140) / n) - 12);
+    const gap = 14;
+    const totalW = n * barW + (n - 1) * gap;
+    const startX = (width - totalW) / 2;
 
-          ctx.fillStyle = '#58a6ff';
-          ctx.fillRect(codeBoxX + 12, lineY - 32, 6, lineSpacing);
+    const comp: number[] = step.comparedIndices ? [...step.comparedIndices] : [];
+    const sorted: number[] = step.sortedIndices ? [...step.sortedIndices] : [];
 
-          ctx.fillStyle = '#58a6ff';
-          ctx.font = 'bold 30px monospace';
-          ctx.textAlign = 'left';
-          ctx.fillText('▶', codeBoxX + 24, lineY);
-        }
+    // Overhead Crane
+    if (comp.length === 2 && comp[0] !== comp[1]) {
+      const idxA = comp[0];
+      const idxB = comp[1];
+      const xA = startX + idxA * (barW + gap) + barW / 2;
+      const xB = startX + idxB * (barW + gap) + barW / 2;
+      const midX = (xA + xB) / 2;
+      const craneTopY = 320;
 
-        ctx.fillStyle = isHighlighted ? '#58a6ff' : '#484f58';
-        ctx.font = 'bold 22px monospace';
-        ctx.textAlign = 'right';
-        ctx.fillText(String(idx + 1), codeBoxX + 68, lineY);
-
-        ctx.fillStyle = isHighlighted ? '#ffffff' : '#8b949e';
-        ctx.font = `${isHighlighted ? 'bold ' : ''}26px monospace`;
-        ctx.textAlign = 'left';
-        ctx.fillText(lines[idx], codeBoxX + 88, lineY);
-      }
-    }
-
-    // 6. Bottom Explanation Box
-    const textDesc = step.description || step.explanation;
-    if (textDesc) {
-      const bY = height - 210;
-      const bH = 130;
-
-      ctx.beginPath();
-      ctx.fillStyle = '#161b22';
-      if (ctx.roundRect) ctx.roundRect(50, bY, width - 100, bH, 16);
-      else ctx.rect(50, bY, width - 100, bH);
-      ctx.fill();
-      ctx.strokeStyle = '#30363d';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      ctx.fillStyle = '#7ee787';
-      ctx.font = 'bold 28px -apple-system, sans-serif';
-      ctx.textAlign = 'center';
-
-      if (textDesc.length > 46) {
-        const splitPoint = textDesc.lastIndexOf(' ', 46);
-        ctx.fillText(textDesc.substring(0, splitPoint), width / 2, bY + 52);
-        ctx.fillText(textDesc.substring(splitPoint + 1), width / 2, bY + 98);
-      } else {
-        ctx.fillText(textDesc, width / 2, bY + 75);
-      }
-    }
-  };
-
-  // --- Layout: Linked List ---
-  function renderLinkedList(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const list = step.array || [10, 20, 30];
-    const nodeW = 140;
-    const nodeH = 90;
-    const arrowW = 60;
-    const totalW = list.length * (nodeW + arrowW) + 90;
-    const startX = Math.max(50, (width - totalW) / 2);
-
-    list.forEach((val, idx) => {
-      const x = startX + idx * (nodeW + arrowW);
-      const isActive = idx === step.currentIndex;
-
-      ctx.beginPath();
-      ctx.fillStyle = isActive ? '#238636' : '#161b22';
-      if (ctx.roundRect) ctx.roundRect(x, startY + 40, nodeW, nodeH, 14);
-      else ctx.rect(x, startY + 40, nodeW, nodeH);
-      ctx.fill();
-      ctx.strokeStyle = isActive ? '#3fb950' : '#30363d';
+      ctx.strokeStyle = '#58a6ff';
       ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(midX, craneTopY - 30);
+      ctx.lineTo(midX, craneTopY);
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.moveTo(x + nodeW * 0.65, startY + 40);
-      ctx.lineTo(x + nodeW * 0.65, startY + 40 + nodeH);
-      ctx.strokeStyle = '#30363d';
-      ctx.lineWidth = 2;
+      ctx.arc(midX, craneTopY, 10, 0, Math.PI * 2);
+      ctx.fillStyle = '#e3b341';
+      ctx.fill();
+
+      const clawY = chartBottomY - ((Math.max(arr[idxA], arr[idxB]) / maxVal) * maxBarH) - 30;
+
+      ctx.beginPath();
+      ctx.moveTo(midX, craneTopY);
+      ctx.lineTo(xA, clawY);
+      ctx.moveTo(midX, craneTopY);
+      ctx.lineTo(xB, clawY);
+      ctx.stroke();
+
+      [xA, xB].forEach((posX) => {
+        ctx.beginPath();
+        ctx.fillStyle = '#e3b341';
+        ctx.rect(posX - barW / 2 - 4, clawY, barW + 8, 14);
+        ctx.fill();
+      });
+    }
+
+    // Render Bars
+    arr.forEach((val, i) => {
+      const h = Math.max(34, (val / maxVal) * maxBarH);
+      const x = startX + i * (barW + gap);
+      const y = chartBottomY - h;
+
+      const isCompared = comp.includes(i);
+      const isSorted = sorted.includes(i);
+      const isPivot = step.pivotIndex === i;
+
+      ctx.beginPath();
+      if (isPivot) {
+        ctx.fillStyle = '#e3b341';
+      } else if (isSorted) {
+        ctx.fillStyle = '#238636';
+      } else if (isCompared) {
+        ctx.fillStyle = '#8f2d2b';
+      } else {
+        ctx.fillStyle = '#102540';
+      }
+
+      if (ctx.roundRect) ctx.roundRect(x, y, barW, h, [8, 8, 0, 0]);
+      else ctx.rect(x, y, barW, h);
+      ctx.fill();
+
+      ctx.strokeStyle = isPivot ? '#ffffff' : isSorted ? '#3fb950' : isCompared ? '#ff7b72' : '#234a7d';
+      ctx.lineWidth = isCompared || isPivot || isSorted ? 3.5 : 2;
       ctx.stroke();
 
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 36px monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(String(val), x + (nodeW * 0.65) / 2, startY + 40 + nodeH / 2 + 12);
-
-      ctx.beginPath();
-      ctx.arc(x + nodeW * 0.82, startY + 40 + nodeH / 2, 7, 0, Math.PI * 2);
-      ctx.fillStyle = '#58a6ff';
-      ctx.fill();
-
-      // Arrow
-      const arrowStartX = x + nodeW;
-      const arrowEndX = arrowStartX + arrowW;
-      const arrowY = startY + 40 + nodeH / 2;
-      ctx.beginPath();
-      ctx.moveTo(arrowStartX, arrowY);
-      ctx.lineTo(arrowEndX, arrowY);
-      ctx.strokeStyle = '#58a6ff';
-      ctx.lineWidth = 4;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(arrowEndX - 10, arrowY - 8);
-      ctx.lineTo(arrowEndX, arrowY);
-      ctx.lineTo(arrowEndX - 10, arrowY + 8);
-      ctx.fillStyle = '#58a6ff';
-      ctx.fill();
-
-      // Pointer marker
-      if (isActive) {
-        ctx.fillStyle = '#3fb950';
-        ctx.font = 'bold 36px sans-serif';
-        ctx.fillText('▲', x + nodeW / 2, startY + 40 + nodeH + 46);
-        ctx.font = 'bold 26px monospace';
-        ctx.fillText('temp', x + nodeW / 2, startY + 40 + nodeH + 82);
-      }
+      ctx.fillText(String(val), x + barW / 2, y + h / 2 + 13);
     });
 
-    const nullX = startX + list.length * (nodeW + arrowW) + 10;
-    ctx.fillStyle = '#f85149';
-    ctx.font = 'bold 34px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText('NULL', nullX, startY + 40 + nodeH / 2 + 12);
-  }
+    // 5. Code Terminal Window (Clean Clip & No Ghosting)
+    const termX = 60;
+    const termY = 670;
+    const termW = width - 120;
+    const termH = 960;
 
-  // --- Layout: Sorting Bars ---
-  function renderBars(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const arr = (step.array as number[]) || [64, 34, 25, 12, 22];
-    const maxVal = Math.max(...arr, 70);
-    const barW = Math.min(80, Math.floor((width - 160) / arr.length));
-    const gap = 16;
-    const totalW = arr.length * barW + (arr.length - 1) * gap;
-    const startX = (width - totalW) / 2;
-    const maxBarH = 240;
+    ctx.beginPath();
+    ctx.fillStyle = '#0c1a2e';
+    if (ctx.roundRect) ctx.roundRect(termX, termY, termW, termH, 20);
+    else ctx.rect(termX, termY, termW, termH);
+    ctx.fill();
+    ctx.strokeStyle = '#1b3b66';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
 
-    arr.forEach((val, idx) => {
-      const x = startX + idx * (barW + gap);
-      const barH = (val / maxVal) * maxBarH;
-      const y = startY + 280 - barH;
-      const isCompared = step.comparedIndices?.includes(idx);
-
+    // Mac Window Buttons
+    const btnY = termY + 32;
+    [
+      { color: '#ff5f56', x: termX + 32 },
+      { color: '#ffbd2e', x: termX + 60 },
+      { color: '#27c93f', x: termX + 88 },
+    ].forEach((btn) => {
       ctx.beginPath();
-      ctx.fillStyle = isCompared ? '#da3633' : '#1f6feb';
-      if (ctx.roundRect) ctx.roundRect(x, y, barW, barH, [10, 10, 0, 0]);
-      else ctx.rect(x, y, barW, barH);
+      ctx.arc(btn.x, btnY, 7.5, 0, Math.PI * 2);
+      ctx.fillStyle = btn.color;
       ctx.fill();
-
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 30px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(val), x + barW / 2, y - 12);
     });
-  }
 
-  // --- Layout: Stack & Queue ---
-  function renderStackQueue(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const isQueue = Boolean(step.queue && step.queue.length > 0);
-    const items = isQueue ? step.queue! : (step.stack || [10, 20, 30]);
+    // Tab Header
+    const tabW = 200;
+    const tabH = 42;
+    const tabX = termX + 130;
+    const tabY = termY + 12;
 
-    ctx.fillStyle = '#58a6ff';
-    ctx.font = 'bold 32px monospace';
+    ctx.beginPath();
+    ctx.fillStyle = '#10233d';
+    if (ctx.roundRect) ctx.roundRect(tabX, tabY, tabW, tabH, [10, 10, 0, 0]);
+    else ctx.rect(tabX, tabY, tabW, tabH);
+    ctx.fill();
+    ctx.strokeStyle = '#1b3b66';
+    ctx.stroke();
+
+    ctx.fillStyle = '#e6edf3';
+    ctx.font = 'bold 20px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(isQueue ? 'QUEUE (FIFO) CONVEYOR' : 'STACK (LIFO) CHAMBER', width / 2, startY + 20);
+    ctx.fillText('bubble_sort.c', tabX + tabW / 2, tabY + 28);
 
-    const boxW = 120;
-    const boxH = 65;
-    const gap = 12;
+    // Code lines rendering with viewport clipping
+    const lines = (rawCode ? rawCode.split(/\r?\n/) : []).map((l) => l.trimEnd());
+    if (lines.length > 0) {
+      const lineSpacing = 48;
+      const codeStartY = termY + 110;
+      const activeLineIdx = (step.line || 1) - 1;
 
-    if (isQueue) {
-      const totalW = items.length * (boxW + gap);
-      const startX = (width - totalW) / 2;
-      items.forEach((item, idx) => {
-        const x = startX + idx * (boxW + gap);
-        ctx.beginPath();
-        ctx.fillStyle = '#161b22';
-        if (ctx.roundRect) ctx.roundRect(x, startY + 80, boxW, boxH, 12);
-        else ctx.rect(x, startY + 80, boxW, boxH);
-        ctx.fill();
-        ctx.strokeStyle = '#58a6ff';
-        ctx.lineWidth = 3;
-        ctx.stroke();
-
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 34px monospace';
-        ctx.fillText(String(item), x + boxW / 2, startY + 80 + boxH / 2 + 12);
-      });
-    } else {
-      items.forEach((item, idx) => {
-        const y = startY + 260 - idx * (boxH + gap);
-        const x = (width - 240) / 2;
-        ctx.beginPath();
-        ctx.fillStyle = idx === items.length - 1 ? '#238636' : '#161b22';
-        if (ctx.roundRect) ctx.roundRect(x, y, 240, boxH, 10);
-        else ctx.rect(x, y, 240, boxH);
-        ctx.fill();
-        ctx.strokeStyle = '#30363d';
-        ctx.stroke();
-
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 32px monospace';
-        ctx.fillText(String(item), width / 2, y + boxH / 2 + 10);
-      });
-    }
-  }
-
-  // --- Layout: Tree Structure ---
-  function renderTree(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const nodes = step.treeNodes || [];
-    if (nodes.length > 1) {
-      ctx.strokeStyle = '#30363d';
-      ctx.lineWidth = 4;
-      for (let i = 1; i < nodes.length; i++) {
-        const parentIdx = Math.floor((i - 1) / 2);
-        const p = nodes[parentIdx];
-        const child = nodes[i];
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(child.x, child.y);
-        ctx.stroke();
+      // Ensure clean view window
+      const visibleLines = 15;
+      let startIdx = 0;
+      if (lines.length > visibleLines && activeLineIdx > 6) {
+        startIdx = Math.min(activeLineIdx - 6, lines.length - visibleLines);
       }
+      const endIdx = Math.min(startIdx + visibleLines, lines.length);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(termX + 4, termY + 60, termW - 8, termH - 115);
+      ctx.clip();
+
+      for (let idx = startIdx; idx < endIdx; idx++) {
+        const row = idx - startIdx;
+        const lineY = codeStartY + row * lineSpacing;
+        const isHighlighted = idx === activeLineIdx;
+
+        if (isHighlighted) {
+          ctx.beginPath();
+          ctx.fillStyle = 'rgba(227, 179, 65, 0.2)';
+          ctx.fillRect(termX + 8, lineY - 32, termW - 16, lineSpacing);
+
+          ctx.fillStyle = '#e3b341';
+          ctx.fillRect(termX + 8, lineY - 32, 6, lineSpacing);
+
+          if (step.evalText) {
+            ctx.fillStyle = '#ff7b72';
+            ctx.font = 'bold 28px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText(step.evalText, termX + termW - 36, lineY);
+          }
+        }
+
+        ctx.fillStyle = isHighlighted ? '#e3b341' : '#486282';
+        ctx.font = 'bold 22px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(String(idx + 1), termX + 60, lineY);
+
+        ctx.fillStyle = isHighlighted ? '#ffffff' : '#9bb2d1';
+        ctx.font = `${isHighlighted ? 'bold ' : ''}25px monospace`;
+        ctx.textAlign = 'left';
+        ctx.fillText(lines[idx], termX + 85, lineY);
+      }
+      ctx.restore();
     }
 
-    nodes.forEach((n) => {
-      const isActive = n.val === step.activeNodeVal;
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, 36, 0, Math.PI * 2);
-      ctx.fillStyle = isActive ? '#238636' : '#161b22';
-      ctx.fill();
-      ctx.strokeStyle = isActive ? '#3fb950' : '#58a6ff';
-      ctx.lineWidth = 4;
-      ctx.stroke();
+    // Terminal Bottom Status Bar
+    const footerY = termY + termH - 48;
+    ctx.fillStyle = '#10233d';
+    ctx.fillRect(termX, footerY, termW, 48);
 
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 28px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(n.val), n.x, n.y + 10);
-    });
-  }
-
-  // --- Layout: Search Grid ---
-  function renderSearchGrid(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const arr = step.array || [10, 20, 30, 40, 50];
-    const boxSize = Math.min(140, Math.floor((width - 120) / arr.length) - 14);
-    const gap = 14;
-    const totalW = arr.length * boxSize + (arr.length - 1) * gap;
-    const startX = (width - totalW) / 2;
-
-    arr.forEach((val, idx) => {
-      const x = startX + idx * (boxSize + gap);
-      const isMatch = idx === step.foundIndex;
-      const isActive = idx === step.currentIndex;
-
-      ctx.beginPath();
-      ctx.fillStyle = isMatch ? '#238636' : isActive ? '#da3633' : '#161b22';
-      if (ctx.roundRect) ctx.roundRect(x, startY + 60, boxSize, boxSize, 16);
-      else ctx.rect(x, startY + 60, boxSize, boxSize);
-      ctx.fill();
-      ctx.strokeStyle = isMatch || isActive ? '#ffffff' : '#30363d';
-      ctx.lineWidth = 4;
-      ctx.stroke();
-
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 44px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(val), x + boxSize / 2, startY + 60 + boxSize / 2 + 16);
-
-      ctx.fillStyle = '#8b949e';
-      ctx.font = '26px monospace';
-      ctx.fillText(`[${idx}]`, x + boxSize / 2, startY + 60 + boxSize + 40);
-
-      if (isActive) {
-        ctx.fillStyle = '#58a6ff';
-        ctx.font = 'bold 40px sans-serif';
-        ctx.fillText('▲', x + boxSize / 2, startY + 60 + boxSize + 88);
-      }
-    });
-  }
-
-  // --- Layout: Variable Watch ---
-  function renderVariableWatch(ctx: CanvasRenderingContext2D, step: UniversalStep, width: number, startY: number) {
-    const vars = step.variables || { status: 'Running' };
-    ctx.fillStyle = '#e3b341';
-    ctx.font = 'bold 34px monospace';
+    ctx.fillStyle = '#79c0ff';
+    ctx.font = 'bold 20px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('LIVE MEMORY & STATE WATCHER', width / 2, startY + 30);
+    ctx.fillText(step.terminalFooter || 'EXECUTION TRACE ACTIVE', width / 2, footerY + 32);
 
-    let vY = startY + 90;
-    Object.entries(vars).forEach(([k, v]) => {
+    // 6. Bottom Explanation Box
+    const textDesc = step.description;
+    if (textDesc) {
+      const descY = height - 190;
+      const descH = 120;
+
       ctx.beginPath();
-      ctx.fillStyle = '#161b22';
-      if (ctx.roundRect) ctx.roundRect((width - 600) / 2, vY, 600, 60, 10);
-      else ctx.rect((width - 600) / 2, vY, 600, 60);
+      ctx.fillStyle = '#0c1a2e';
+      if (ctx.roundRect) ctx.roundRect(60, descY, width - 120, descH, 16);
+      else ctx.rect(60, descY, width - 120, descH);
       ctx.fill();
-      ctx.strokeStyle = '#30363d';
+      ctx.strokeStyle = '#1b3b66';
+      ctx.lineWidth = 2;
       ctx.stroke();
 
-      ctx.fillStyle = '#58a6ff';
-      ctx.font = 'bold 28px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText(`${k}:`, (width - 550) / 2, vY + 40);
+      ctx.fillStyle = '#39d353';
+      ctx.font = 'bold 28px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
 
-      ctx.fillStyle = '#7ee787';
-      ctx.textAlign = 'right';
-      ctx.fillText(String(v), (width + 550) / 2, vY + 40);
-      vY += 75;
-    });
-  }
+      if (textDesc.length > 48) {
+        const splitPoint = textDesc.lastIndexOf(' ', 48);
+        ctx.fillText(textDesc.substring(0, splitPoint), width / 2, descY + 48);
+        ctx.fillText(textDesc.substring(splitPoint + 1), width / 2, descY + 92);
+      } else {
+        ctx.fillText(textDesc, width / 2, descY + 68);
+      }
+    }
+  };
 
   useEffect(() => {
     drawFrame(currentStepIdx);
   }, [currentStepIdx, steps, rawCode]);
 
+  // Stepper loop with automatic end-of-reel video download
   useEffect(() => {
     let timeoutId: any;
     if (isPlaying) {
       if (currentStepIdx < steps.length - 1) {
         timeoutId = setTimeout(() => {
-          setCurrentStepIdx((prev) => prev + 1);
-        }, 1100);
+          const nextIdx = currentStepIdx + 1;
+          const nextStep = steps[nextIdx];
+          const isSwap = Boolean(nextStep?.swappedIndices);
+          playMechanicalTick(isSwap);
+          setCurrentStepIdx(nextIdx);
+        }, 900);
       } else {
+        // Reached end of execution
         setIsPlaying(false);
+        if (isRecording) {
+          // Pause slightly on the final frame so the completed state is visible in the video
+          setTimeout(() => {
+            handleStopRecording();
+          }, 1200);
+        }
       }
     }
     return () => clearTimeout(timeoutId);
-  }, [isPlaying, currentStepIdx, steps.length]);
+  }, [isPlaying, currentStepIdx, steps, isRecording]);
 
+  // Start Recording
   const handleStartRecording = () => {
     const canvas = canvasRef.current;
     if (!canvas || steps.length === 0) return;
 
+    initAudio();
     recordedChunksRef.current = [];
     setCurrentStepIdx(0);
 
-    const stream = canvas.captureStream(30);
-    const options = { mimeType: 'video/webm;codecs=vp9' };
-    const recorder = new MediaRecorder(
-      stream,
-      MediaRecorder.isTypeSupported(options.mimeType) ? options : undefined
-    );
+    const canvasStream = canvas.captureStream(30);
+    const audioTracks = audioDestinationRef.current ? audioDestinationRef.current.stream.getAudioTracks() : [];
+    const combinedStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...audioTracks,
+    ]);
+
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+      ? 'video/webm;codecs=vp9,opus'
+      : 'video/webm';
+
+    const recorder = new MediaRecorder(combinedStream, { mimeType });
 
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      if (e.data && e.data.size > 0) {
+        recordedChunksRef.current.push(e.data);
+      }
     };
 
     recorder.onstop = () => {
@@ -478,8 +460,10 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'code-reel-9x16.webm';
+      a.download = 'algorithm-visual-reel.webm';
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
       setIsRecording(false);
     };
@@ -494,7 +478,11 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
-    setIsPlaying(false);
+  };
+
+  const togglePlayback = () => {
+    initAudio();
+    setIsPlaying(!isPlaying);
   };
 
   return (
@@ -514,11 +502,11 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
           width: '100%',
           maxWidth: isMobile ? '280px' : '340px',
           aspectRatio: '9 / 16',
-          backgroundColor: '#000000',
-          borderRadius: '12px',
+          backgroundColor: '#0a1626',
+          borderRadius: '16px',
           overflow: 'hidden',
-          boxShadow: '0 8px 30px rgba(0, 0, 0, 0.7)',
-          border: '1px solid #30363d',
+          boxShadow: '0 12px 40px rgba(0, 0, 0, 0.8)',
+          border: '1px solid #1b3b66',
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
@@ -548,7 +536,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
         }}
       >
         <button
-          onClick={() => setIsPlaying(!isPlaying)}
+          onClick={togglePlayback}
           disabled={steps.length === 0}
           style={{
             flex: '1 1 calc(50% - 4px)',
@@ -563,7 +551,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
             opacity: steps.length === 0 ? 0.5 : 1,
           }}
         >
-          {isPlaying ? 'Pause' : 'Play'}
+          {isPlaying ? 'Pause' : 'Play With Sound'}
         </button>
 
         <button
@@ -575,9 +563,9 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
           style={{
             flex: '1 1 calc(50% - 4px)',
             padding: '10px',
-            backgroundColor: '#21262d',
+            backgroundColor: '#162b47',
             color: '#c9d1d9',
-            border: '1px solid #30363d',
+            border: '1px solid #1b3b66',
             borderRadius: '6px',
             fontWeight: 600,
             fontSize: '0.85rem',
@@ -604,7 +592,7 @@ export default function ReelCanvas({ steps, rawCode = '', isMobile = false }: Re
             opacity: steps.length === 0 ? 0.5 : 1,
           }}
         >
-          {isRecording ? 'Stop & Download Reel' : 'Record 9:16 Reel'}
+          {isRecording ? 'Stop & Download Reel' : 'Record 9:16 Reel (With Audio)'}
         </button>
       </div>
     </div>
